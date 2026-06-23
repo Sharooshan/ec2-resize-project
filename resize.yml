@@ -1,0 +1,32 @@
+- name: EC2 Resize Automation
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    instance_id: "i-06fe21df17ac7a1ae"
+    new_type: "t3.small"
+    region: "us-east-1"
+
+  tasks:
+
+    - name: Stop EC2 instance
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ instance_id }}"
+        state: stopped
+        region: "{{ region }}"
+        wait: yes
+
+    - name: Modify instance type (FORCE)
+      ansible.builtin.command:
+        cmd: >
+          aws ec2 modify-instance-attribute
+          --instance-id {{ instance_id }}
+          --instance-type "{\"Value\": \"{{ new_type }}\"}"
+          --region {{ region }}
+
+    - name: Start EC2 instance
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ instance_id }}"
+        state: running
+        region: "{{ region }}"
+        wait: yes
