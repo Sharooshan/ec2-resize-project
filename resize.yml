@@ -16,13 +16,11 @@
         region: "{{ region }}"
         wait: yes
 
-    - name: Modify instance type (FORCE)
-      ansible.builtin.command:
-        cmd: >
-          aws ec2 modify-instance-attribute
-          --instance-id {{ instance_id }}
-          --instance-type "{\"Value\": \"{{ new_type }}\"}"
-          --region {{ region }}
+    - name: Change instance type
+      amazon.aws.ec2_instance:
+        instance_ids: "{{ instance_id }}"
+        instance_type: "{{ new_type }}"
+        region: "{{ region }}"
 
     - name: Start EC2 instance
       amazon.aws.ec2_instance:
