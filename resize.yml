@@ -20,45 +20,34 @@
         sys_id: "{{ change_sys_id }}"
       register: cr_data
 
-    - name: Extract full description
+    - name: Extract description
       set_fact:
         desc: "{{ cr_data.records[0].short_description }}"
 
-    - name: Parse details from description
+    - name: Parse values
       set_fact:
         instance_id: "{{ desc.split(' ')[3] }}"
-        public_ip: "{{ desc.split('(')[1].split(')')[0] }}"
         target_type: "{{ desc.split(' to ')[1] }}"
 
-    - name: Show extracted values
-      debug:
-        msg:
-          - "Instance ID: {{ instance_id }}"
-          - "IP: {{ public_ip }}"
-          - "Target Type: {{ target_type }}"
+    - name: Stop EC2
+      amazon.aws.ec2_instance:
+        instance_ids: ["{{ instance_id }}"]
+        state: stopped
+        region: "{{ region }}"
+        wait: yes
 
-    - name: Stop EC2 instance
-      command: >
-        aws ec2 stop-instances
-        --instance-ids {{ instance_id }}
-        --region {{ region }}
+    - name: Change instance type
+      amazon.aws.ec2_instance:
+        instance_ids: ["{{ instance_id }}"]
+        instance_type: "{{ target_type }}"
+        region: "{{ region }}"
 
-    - name: Wait for stop
-      pause:
-        seconds: 20
-
-    - name: Modify instance type
-      command: >
-        aws ec2 modify-instance-attribute
-        --instance-id {{ instance_id }}
-        --instance-type Value={{ target_type }}
-        --region {{ region }}
-
-    - name: Start EC2 instance
-      command: >
-        aws ec2 start-instances
-        --instance-ids {{ instance_id }}
-        --region {{ region }}
+    - name: Start EC2
+      amazon.aws.ec2_instance:
+        instance_ids: ["{{ instance_id }}"]
+        state: running
+        region: "{{ region }}"
+        wait: yes
 
     - name: Update CR
       servicenow.itsm.change_request:
@@ -68,8 +57,4 @@
           password: "{{ snow_pass }}"
         sys_id: "{{ change_sys_id }}"
         state: "Review"
-        description: |
-          Automation SUCCESS
-          Instance {{ instance_id }} resized to {{ target_type }}
-
-
+        description: "Automation SUCCESS"
