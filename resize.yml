@@ -1,30 +1,65 @@
-- name: EC2 Resize Automation
+- name: End-to-End CR Driven EC2 Resize Automation
   hosts: localhost
   gather_facts: no
 
   vars:
-    instance_id: "i-06fe21df17ac7a1ae"
-    new_type: "t3.small"
+    snow_host: "https://nowlearning-nlinst04341393-5edtd-0001.lab.service-now.com"
+    snow_user: "admin"
+    snow_pass: "1S7pw9P5mhrp"
+    change_sys_id: "37d3a4d7d9e103107f44c63f4a8f0be3"
     region: "us-east-1"
 
   tasks:
 
-    - name: Stop EC2 instance
-      amazon.aws.ec2_instance:
-        instance_ids: "{{ instance_id }}"
-        state: stopped
-        region: "{{ region }}"
-        wait: yes
+    - name: Get Change Request using sys_id
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+      register: cr_data
 
-    - name: Change instance type
-      amazon.aws.ec2_instance:
-        instance_ids: "{{ instance_id }}"
-        instance_type: "{{ new_type }}"
-        region: "{{ region }}"
+    - name: Extract CR description
+      set_fact:
+        cr_description: "{{ cr_data.records[0].description }}"
+
+    - name: Parse instance details
+      set_fact:
+        instance_id: "{{ cr_description.split('Instance ID: ')[1].split('\n')[0] }}"
+        target_type: "{{ cr_description.split('Target Type: ')[1].split('\n')[0] }}"
+
+    - name: Stop EC2 instance
+      command: >
+        aws ec2 stop-instances
+        --instance-ids {{ instance_id }}
+        --region {{ region }}
+
+    - name: Wait for stop
+      pause:
+        seconds: 20
+
+    - name: Modify instance type
+      command: >
+        aws ec2 modify-instance-attribute
+        --instance-id {{ instance_id }}
+        --instance-type Value={{ target_type }}
+        --region {{ region }}
 
     - name: Start EC2 instance
-      amazon.aws.ec2_instance:
-        instance_ids: "{{ instance_id }}"
-        state: running
-        region: "{{ region }}"
-        wait: yes
+      command: >
+        aws ec2 start-instances
+        --instance-ids {{ instance_id }}
+        --region {{ region }}
+
+    - name: Update CR on success
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        state: "Review"
+        description: |
+          Automation SUCCESS
+          Instance {{ instance_id }} resized to {{ target_type }}
