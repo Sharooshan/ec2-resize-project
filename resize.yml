@@ -1,4 +1,4 @@
-- name: EC2 Resize Automation (Final - Only Assignment Fix)
+- name: EC2 Resize Automation (Final AWX Version)
   hosts: localhost
   gather_facts: no
 
@@ -8,11 +8,12 @@
     snow_pass: "1S7pw9P5mhrp"
     region: "us-east-1"
 
-    # ✅ CHANGED HERE ONLY
+    # ✅ Using group NAME (not sys_id)
     assignment_group_name: "Help Desk"
 
   tasks:
 
+    # ✅ FETCH CR
     - name: Fetch CR dynamically
       servicenow.itsm.change_request_info:
         instance:
@@ -27,16 +28,19 @@
         msg: "No Change Request found"
       when: cr_data.records | length == 0
 
+    # ✅ GET LATEST CR
     - name: Extract latest CR
       set_fact:
         desc: "{{ (cr_data.records | sort(attribute='sys_created_on'))[-1].short_description }}"
         change_sys_id: "{{ (cr_data.records | sort(attribute='sys_created_on'))[-1].sys_id }}"
 
+    # ✅ PARSE VALUES
     - name: Parse values
       set_fact:
         instance_id: "{{ desc.split(' ')[3] }}"
         target_type: "{{ desc.split(' to ')[1] }}"
 
+    # ✅ START LOG
     - name: Update CR - start log
       servicenow.itsm.change_request:
         instance:
@@ -46,6 +50,7 @@
         sys_id: "{{ change_sys_id }}"
         description: "Automation started for EC2 resize"
 
+    # ✅ GET INSTANCE INFO
     - name: Get EC2 info
       amazon.aws.ec2_instance_info:
         instance_ids: ["{{ instance_id }}"]
@@ -57,7 +62,7 @@
         msg: "Instance not found"
       when: ec2_info.instances | length == 0
 
-    # ✅ TYPE VALIDATION (UNCHANGED)
+    # ✅ ✅ TYPE VALIDATION (FAILURE FLOW)
     - name: Get current instance type
       set_fact:
         current_type: "{{ ec2_info.instances[0].instance_type | trim }}"
@@ -78,6 +83,7 @@
         msg: "Stopping execution due to wrong instance type"
       when: current_type != "t3.micro"
 
+    # ✅ STOP INSTANCE
     - name: Stop instance if running
       amazon.aws.ec2_instance:
         instance_ids: ["{{ instance_id }}"]
@@ -95,12 +101,12 @@
         sys_id: "{{ change_sys_id }}"
         description: "Instance stopped successfully"
 
+    # ✅ ✅ ✅ FIXED MODIFY (NO CLI)
     - name: Modify instance type
-      command: >
-        aws ec2 modify-instance-attribute
-        --instance-id {{ instance_id }}
-        --instance-type Value={{ target_type }}
-        --region {{ region }}
+      amazon.aws.ec2_instance:
+        instance_ids: ["{{ instance_id }}"]
+        instance_type: "{{ target_type }}"
+        region: "{{ region }}"
 
     - name: Update CR - modify step
       servicenow.itsm.change_request:
@@ -111,6 +117,7 @@
         sys_id: "{{ change_sys_id }}"
         description: "Instance type changed to {{ target_type }}"
 
+    # ✅ START INSTANCE
     - name: Start instance with retry
       amazon.aws.ec2_instance:
         instance_ids: ["{{ instance_id }}"]
@@ -142,6 +149,7 @@
         sys_id: "{{ change_sys_id }}"
         description: "Instance started successfully"
 
+    # ✅ VERIFY
     - name: Wait before verification
       pause:
         seconds: 10
@@ -162,6 +170,7 @@
         msg: "Verification failed"
       when: actual_type != expected_type
 
+    # ✅ FINAL SUCCESS
     - name: Update CR SUCCESS
       servicenow.itsm.change_request:
         instance:
