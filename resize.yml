@@ -1,4 +1,4 @@
-- name: EC2 Resize from CR Description
+- name: EC2 Resize Automation (Final - Only Assignment Fix)
   hosts: localhost
   gather_facts: no
 
@@ -6,50 +6,163 @@
     snow_host: "https://nowlearning-nlinst04341393-5edtd-0001.lab.service-now.com"
     snow_user: "admin"
     snow_pass: "1S7pw9P5mhrp"
-    change_sys_id: "37d3a4d7d9e103107f44c63f4a8f0be3"
     region: "us-east-1"
+
+    # ✅ CHANGED HERE ONLY
+    assignment_group_name: "Help Desk"
 
   tasks:
 
-    - name: Get Change Request
+    - name: Fetch CR dynamically
       servicenow.itsm.change_request_info:
         instance:
           host: "{{ snow_host }}"
           username: "{{ snow_user }}"
           password: "{{ snow_pass }}"
-        sys_id: "{{ change_sys_id }}"
+        sysparm_query: "short_descriptionLIKEec2"
       register: cr_data
 
-    - name: Extract description
+    - name: Fail if no CR found
+      fail:
+        msg: "No Change Request found"
+      when: cr_data.records | length == 0
+
+    - name: Extract latest CR
       set_fact:
-        desc: "{{ cr_data.records[0].short_description }}"
+        desc: "{{ (cr_data.records | sort(attribute='sys_created_on'))[-1].short_description }}"
+        change_sys_id: "{{ (cr_data.records | sort(attribute='sys_created_on'))[-1].sys_id }}"
 
     - name: Parse values
       set_fact:
         instance_id: "{{ desc.split(' ')[3] }}"
         target_type: "{{ desc.split(' to ')[1] }}"
 
-    - name: Stop EC2
+    - name: Update CR - start log
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        description: "Automation started for EC2 resize"
+
+    - name: Get EC2 info
+      amazon.aws.ec2_instance_info:
+        instance_ids: ["{{ instance_id }}"]
+        region: "{{ region }}"
+      register: ec2_info
+
+    - name: Validate instance exists
+      fail:
+        msg: "Instance not found"
+      when: ec2_info.instances | length == 0
+
+    # ✅ TYPE VALIDATION (UNCHANGED)
+    - name: Get current instance type
+      set_fact:
+        current_type: "{{ ec2_info.instances[0].instance_type | trim }}"
+
+    - name: Assign to manual team if type mismatch
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        assignment_group: "{{ assignment_group_name }}"
+        description: "Instance type mismatch. Expected t3.micro but found {{ current_type }}. Assigned to manual team."
+      when: current_type != "t3.micro"
+
+    - name: Stop execution if wrong type
+      fail:
+        msg: "Stopping execution due to wrong instance type"
+      when: current_type != "t3.micro"
+
+    - name: Stop instance if running
       amazon.aws.ec2_instance:
         instance_ids: ["{{ instance_id }}"]
         state: stopped
         region: "{{ region }}"
         wait: yes
+      when: ec2_info.instances[0].state.name == "running"
 
-    - name: Change instance type
-      amazon.aws.ec2_instance:
-        instance_ids: ["{{ instance_id }}"]
-        instance_type: "{{ target_type }}"
-        region: "{{ region }}"
+    - name: Update CR - stop step
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        description: "Instance stopped successfully"
 
-    - name: Start EC2
+    - name: Modify instance type
+      command: >
+        aws ec2 modify-instance-attribute
+        --instance-id {{ instance_id }}
+        --instance-type Value={{ target_type }}
+        --region {{ region }}
+
+    - name: Update CR - modify step
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        description: "Instance type changed to {{ target_type }}"
+
+    - name: Start instance with retry
       amazon.aws.ec2_instance:
         instance_ids: ["{{ instance_id }}"]
         state: running
         region: "{{ region }}"
         wait: yes
+      register: start_result
+      retries: 3
+      delay: 10
+      until: start_result is succeeded
 
-    - name: Update CR
+    - name: Handle start failure
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        assignment_group: "{{ assignment_group_name }}"
+        description: "Instance start failed - assigned to manual team"
+      when: start_result is failed
+
+    - name: Update CR - start step
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_host }}"
+          username: "{{ snow_user }}"
+          password: "{{ snow_pass }}"
+        sys_id: "{{ change_sys_id }}"
+        description: "Instance started successfully"
+
+    - name: Wait before verification
+      pause:
+        seconds: 10
+
+    - name: Verify instance type
+      amazon.aws.ec2_instance_info:
+        instance_ids: ["{{ instance_id }}"]
+        region: "{{ region }}"
+      register: verify_info
+
+    - name: Normalize values
+      set_fact:
+        actual_type: "{{ verify_info.instances[0].instance_type | trim }}"
+        expected_type: "{{ target_type | trim }}"
+
+    - name: Fail if verification failed
+      fail:
+        msg: "Verification failed"
+      when: actual_type != expected_type
+
+    - name: Update CR SUCCESS
       servicenow.itsm.change_request:
         instance:
           host: "{{ snow_host }}"
@@ -57,4 +170,4 @@
           password: "{{ snow_pass }}"
         sys_id: "{{ change_sys_id }}"
         state: "Review"
-        description: "Automation SUCCESS"
+        description: "EC2 resized successfully ✅"
